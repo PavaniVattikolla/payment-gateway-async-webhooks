@@ -1,0 +1,122 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:13-alpine
+    container_name: postgres_gateway
+    environment:
+      POSTGRES_USER: gateway_user
+      POSTGRES_PASSWORD: gateway_pass
+      POSTGRES_DB: payment_gateway
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gateway_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - gateway-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis_gateway
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - gateway-network
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: gateway_api
+    environment:
+      DATABASE_URL: postgresql://gateway_user:gateway_pass@postgres:5432/payment_gateway
+      REDIS_URL: redis://redis:6379
+      NODE_ENV: development
+      PORT: 8000
+      API_KEY: key_test_abc123
+      API_SECRET: secret_test_xyz789
+      TEST_MODE: ${TEST_MODE:-false}
+      TEST_PROCESSING_DELAY: ${TEST_PROCESSING_DELAY:-1000}
+      TEST_PAYMENT_SUCCESS: ${TEST_PAYMENT_SUCCESS:-true}
+      WEBHOOK_RETRY_INTERVALS_TEST: ${WEBHOOK_RETRY_INTERVALS_TEST:-false}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - gateway-network
+    command: sh -c "npm install && npm run migrate && npm start"
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    container_name: gateway_worker
+    environment:
+      DATABASE_URL: postgresql://gateway_user:gateway_pass@postgres:5432/payment_gateway
+      REDIS_URL: redis://redis:6379
+      NODE_ENV: development
+      TEST_MODE: ${TEST_MODE:-false}
+      TEST_PROCESSING_DELAY: ${TEST_PROCESSING_DELAY:-1000}
+      TEST_PAYMENT_SUCCESS: ${TEST_PAYMENT_SUCCESS:-true}
+      WEBHOOK_RETRY_INTERVALS_TEST: ${WEBHOOK_RETRY_INTERVALS_TEST:-false}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    networks:
+      - gateway-network
+    command: sh -c "npm install && npm run start:worker"
+
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: gateway_dashboard
+    ports:
+      - "3000:3000"
+    environment:
+      REACT_APP_API_URL: http://localhost:8000
+    depends_on:
+      - api
+    networks:
+      - gateway-network
+    command: sh -c "npm install && npm start"
+
+  checkout:
+    build:
+      context: ./checkout-page
+      dockerfile: Dockerfile
+    container_name: gateway_checkout
+    ports:
+      - "3001:3001"
+    environment:
+      REACT_APP_API_URL: http://localhost:8000
+    depends_on:
+      - api
+    networks:
+      - gateway-network
+    command: sh -c "npm install && npm start"
+
+volumes:
+  postgres_data:
+
+networks:
+  gateway-network:
+    driver: bridge

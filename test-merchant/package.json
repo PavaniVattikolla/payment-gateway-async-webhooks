@@ -1,0 +1,13 @@
+{
+  "name": "test-merchant",
+  "version": "1.0.0",
+  "description": "Test merchant webhook receiver for payment gateway",
+  "main": "webhook-receiver.js",
+  "scripts": {
+    "start": "node webhook-receiver.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "crypto": "^1.0.1"
+  }
+}

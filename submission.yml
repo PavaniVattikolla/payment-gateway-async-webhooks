@@ -1,0 +1,121 @@
+# Submission Configuration for Automated Evaluation
+# MANDATORY: This file contains commands for setup, start, test, verify, and shutdown
+
+setup:
+  description: "Install dependencies and configure environment"
+  commands:
+    - npm install
+    - npm run setup
+    - docker volume create postgres_data || true
+
+start:
+  description: "Launch all services using docker-compose"
+  commands:
+    - docker-compose up -d
+    - sleep 30
+    - docker-compose ps
+
+test:
+  description: "Run test suite if available"
+  commands:
+    - npm run test || echo "No tests configured"
+
+verify:
+  description: "Verify API endpoints and system functionality"
+  commands:
+    # Check API health
+    - curl -f http://localhost:8000/api/v1/test/jobs/status || exit 1
+    
+    # Test Create Payment endpoint
+    - curl -X POST http://localhost:8000/api/v1/payments \
+      -H "X-Api-Key: key_test_abc123" \
+      -H "X-Api-Secret: secret_test_xyz789" \
+      -H "Content-Type: application/json" \
+      -d '{"order_id": "order_test_123", "method": "upi", "vpa": "user@paytm"}' || exit 1
+    
+    # Verify database connectivity
+    - docker exec postgres_gateway pg_isready -U gateway_user || exit 1
+    
+    # Verify Redis connectivity
+    - docker exec redis_gateway redis-cli ping || exit 1
+    
+    # Check worker service status
+    - docker-compose ps gateway_worker | grep -q "Up" || exit 1
+    
+    # Check job queue status endpoint
+    - curl -f http://localhost:8000/api/v1/test/jobs/status || exit 1
+
+shutdown:
+  description: "Gracefully stop all services"
+  commands:
+    - docker-compose down
+    - docker volume rm postgres_data || true
+
+ports:
+  api: 8000
+  dashboard: 3000
+  checkout: 3001
+  postgres: 5432
+  redis: 6379
+
+services:
+  - name: postgres
+    container: postgres_gateway
+    healthcheck: pg_isready -U gateway_user
+  - name: redis
+    container: redis_gateway
+    healthcheck: redis-cli ping
+  - name: api
+    container: gateway_api
+    port: 8000
+    healthcheck: "GET /api/v1/test/jobs/status"
+  - name: worker
+    container: gateway_worker
+    healthcheck: "Job processing status"
+  - name: dashboard
+    container: gateway_dashboard
+    port: 3000
+  - name: checkout
+    container: gateway_checkout
+    port: 3001
+
+requirements:
+  - Name: Database Schema
+    description: "Verify refunds, webhook_logs, idempotency_keys tables exist"
+    verification: "Check migrations have run successfully"
+  
+  - Name: API Endpoints
+    description: "All REST endpoints functioning correctly"
+    verification: "POST /api/v1/payments, POST /api/v1/payments/{id}/refunds, GET /api/v1/webhooks, POST /api/v1/webhooks/{id}/retry"
+  
+  - Name: Async Processing
+    description: "Payment processing happens asynchronously via job queue"
+    verification: "Check job queue status endpoint returns pending/processing/completed jobs"
+  
+  - Name: Webhook System
+    description: "Webhooks deliver with HMAC-SHA256 signatures"
+    verification: "Verify webhook logs contain signature and payload"
+  
+  - Name: Idempotency Keys
+    description: "Duplicate requests with same key return cached response"
+    verification: "Test with Idempotency-Key header"
+  
+  - Name: Refund Processing
+    description: "Full and partial refunds process asynchronously"
+    verification: "Create refund and check status updates to 'processed'"
+  
+  - Name: Embeddable SDK
+    description: "JavaScript SDK loads and opens payment modal"
+    verification: "SDK loads globally as PaymentGateway class"
+  
+  - Name: Dashboard
+    description: "Dashboard pages with webhook configuration and logs"
+    verification: "Check /dashboard/webhooks page loads and displays logs"
+
+environment:
+  TEST_MODE: "true"
+  TEST_PROCESSING_DELAY: "1000"
+  TEST_PAYMENT_SUCCESS: "true"
+  WEBHOOK_RETRY_INTERVALS_TEST: "true"
+  NODE_ENV: "development"
+  LOG_LEVEL: "debug"
